@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {EventEmitter} from 'node:events';
-import {createRelay,normalizeId} from './relay.mjs';
+import {createRelay,normalizeId,upstreamFailure} from './relay.mjs';
 class Socket extends EventEmitter{readyState=1;bufferedAmount=0;messages=[];send(data){this.messages.push(JSON.parse(data))}close(){this.readyState=3;this.emit('close')}message(data){this.emit('message',JSON.stringify(data))}}
 class Connection extends EventEmitter{connects=0;disconnects=0;async connect(){this.connects++}async disconnect(){this.disconnects++}}
 const flush=()=>new Promise(r=>setImmediate(r));
@@ -12,3 +12,5 @@ test('timeout and disconnect release upstream; no client means no traffic',async
 test('limits bound connection and buffer usage',async()=>{const f=fixture({maxRooms:1,maxClients:2});try{const a=f.join('@alice');await flush();const b=f.join('@bob');assert.equal(b.messages.at(-1).terminal,true);const extra=new Socket();f.relay.attach(extra);assert.equal(extra.readyState,3);a.bufferedAmount=70000;f.connections.get('alice').emit('chat',{comment:'木',msgId:'one',timestamp:f.now()});assert.equal(a.readyState,3)}finally{f.relay.close()}});
 
 test('connection starts stay bounded across new sockets',async()=>{const f=fixture({maxStartsPerMinute:1});try{const a=f.join('@alice');await flush();a.close();await flush();const b=f.join('@bob');assert.equal(b.messages.at(-1).terminal,true);assert.equal(f.connections.has('bob'),false);b.close();f.advance(60000);f.join('@bob');await flush();assert.equal(f.connections.has('bob'),true)}finally{f.relay.close()}});
+
+test('diagnostics classify offline and signing without logging raw data',()=>{assert.deepEqual(upstreamFailure({exception:Error("The requested user isn't online :( ")}),{kind:'offline',type:'Error'});const details=upstreamFailure(Error('signing API key SECRET_ID_PROFILE'));assert.equal(details.kind,'signing');assert.equal(JSON.stringify(details).includes('SECRET'),false)});
