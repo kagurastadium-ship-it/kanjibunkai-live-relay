@@ -30,7 +30,7 @@ export function createRelay({createConnection,now=Date.now,timeoutMs=20000,maxRo
    connection.on('streamEnd',()=>end(room,'LIVE配信が終了しました'));
    connection.on('chat',raw=>{
     if(room.closed||!room.ready)return;
-    const comment=String(raw?.comment||'').trim();if(Array.from(comment).length!==1)return;
+    const comment=String(raw?.content??raw?.comment??'').trim();if(Array.from(comment).length!==1)return;
     const timestamp=eventTime(raw,now());if(timestamp===null||timestamp<room.startedAt||timestamp>now()+60000)return;
     const eventId=String(raw.msgId??raw.common?.msgId??raw.eventId??randomUUID());if(room.seen.has(eventId))return;room.seen.add(eventId);if(room.seen.size>512)room.seen.delete(room.seen.values().next().value);
     for(const c of room.clients)if(timestamp>=c.joinedAt&&timestamp>=c.roundStartedAt)send(c,{type:'chat',comment,eventId,timestamp});
