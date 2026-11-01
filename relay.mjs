@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import Answers from './answer-comments.cjs';
 export function normalizeId(value){const id=String(value||'').trim().replace(/^[@＠]/,'').toLowerCase();if(!/^[a-z0-9._]{2,24}$/.test(id))throw Error('invalid-id');return id}
 export function eventTime(raw,now=Date.now()){const value=raw?.common?.createTime??raw?.createTime??raw?.timestamp;if(value==null)return now;const n=Number(value);return Number.isFinite(n)&&n>0?(n<1e12?n*1000:n):null}
 export function upstreamFailure(error){
@@ -30,7 +31,7 @@ export function createRelay({createConnection,now=Date.now,timeoutMs=20000,maxRo
    connection.on('streamEnd',()=>end(room,'LIVE配信が終了しました'));
    connection.on('chat',raw=>{
     if(room.closed||!room.ready)return;
-    const comment=String(raw?.content??raw?.comment??'').trim();if(Array.from(comment).length!==1)return;
+    const comment=String(raw?.content??raw?.comment??'').trim();if(!Answers.parse(comment))return;
     const timestamp=eventTime(raw,now());if(timestamp===null||timestamp<room.startedAt||timestamp>now()+60000)return;
     const eventId=String(raw.msgId??raw.common?.msgId??raw.eventId??randomUUID());if(room.seen.has(eventId))return;room.seen.add(eventId);if(room.seen.size>512)room.seen.delete(room.seen.values().next().value);
     for(const c of room.clients)if(timestamp>=c.joinedAt&&timestamp>=c.roundStartedAt)send(c,{type:'chat',comment,eventId,timestamp});
