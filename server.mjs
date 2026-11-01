@@ -1,0 +1,14 @@
+import http from 'node:http';
+import {readFileSync} from 'node:fs';
+import {WebSocketServer} from 'ws';
+import {TikTokLiveConnection} from 'tiktok-live-connector';
+import {createRelay} from './relay.mjs';
+const host=process.env.HOST||'127.0.0.1',port=Number(process.env.PORT||8787);
+const relay=createRelay({createConnection:id=>new TikTokLiveConnection(id,{processInitialData:false,fetchRoomInfoOnConnect:true,enableExtendedGiftInfo:false,authenticateWs:false,...(process.env.EULER_API_KEY?{signApiKey:process.env.EULER_API_KEY}:{}),webClientOptions:{timeout:{request:10000}},wsClientOptions:{handshakeTimeout:10000}})});
+const sourceFiles=['relay.mjs','server.mjs','relay.test.mjs','render.yaml','package.json','package-lock.json','Dockerfile','README.md','LICENSE','THIRD_PARTY_NOTICES.md'];
+const server=http.createServer((req,res)=>{if(req.url==='/source'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end('<h1>KanjiBunkai LIVE relay source (AGPL-3.0-only)</h1>'+sourceFiles.map(name=>'<p><a href="/source/'+name+'">'+name+'</a></p>').join(''))}const file=req.url?.startsWith('/source/')?req.url.slice(8):'';if(sourceFiles.includes(file)){res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8'});return res.end(readFileSync(new URL('./'+file,import.meta.url)))}if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true}))}else{res.writeHead(404);res.end()}});
+const sockets=new WebSocketServer({noServer:true,maxPayload:2048,perMessageDeflate:false});
+server.on('upgrade',(req,socket,head)=>{if(req.url!=='/live'){socket.destroy();return}sockets.handleUpgrade(req,socket,head,ws=>sockets.emit('connection',ws,req))});
+sockets.on('connection',socket=>relay.attach(socket));
+server.listen(port,host,()=>console.log(`LIVE relay listening on ${host}:${server.address().port}; endpoint /live`));
+const close=()=>{relay.close();sockets.close();server.close()};process.once('SIGTERM',close);process.once('SIGINT',close);

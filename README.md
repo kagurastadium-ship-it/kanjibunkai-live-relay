@@ -1,2 +1,42 @@
-# kanjibunkai-live-relay
-Anonymous TikTok LIVE comment relay for KanjiBunkai. Server source only; no app or user data.
+# KanjiBunkai LIVE relay
+
+アプリ利用者が入力するのは `@配信者ID` だけです。自分と他人の公開LIVEを同じ経路で扱います。URLはアプリ運用側がビルド時に1回設定し、利用者には入力させません。
+
+このサーバーは自動回答エンジンではなく、LIVEコメント受信専用です。ゲームの問題生成・学習・広告とは別プロセスで、LIVE機能がOFFならアプリから接続しません。TikTok配信の開始・コメント投稿操作は行いません。
+
+## ローカル起動
+
+Node 20以上で `npm ci`、`npm test`、`npm start`。既定は `127.0.0.1:8787`、`GET /health` と WebSocket `/live` です。起動だけではTikTokへ通信せず、IDの購読要求を受けたときだけ接続します。Dockerfileでも起動できます。
+
+## 今回の無料運用方針
+
+Cloud Runなど従量課金のサービスは使いません。RenderのHobbyワークスペースとFree Web Serviceを使い、支払い方法は登録しません。無料枠を超えた場合は課金ではなく停止・ビルド停止になります。アイドル15分で休止し、次の接続で復帰に約1分かかる仕様です。これを回避する定期アクセスは追加しません。実配信・アプリ更新申請の前に、配信中の接続維持を確認します。
+
+Freeは稼働保証がなく、提供元も本番用途への利用を推奨していません。上限や仕様変更・提供停止時はアプリ側で接続エラーとして扱い、有料プランへ自動移行しません。
+
+公式: https://render.com/docs/free 、https://render.com/docs/websocket
+
+## 運用前に必要な設定
+
+1. 常時起動できるNode/Docker対応環境へ配置し、TLS終端を経由して `/live` をWSS公開します。ポートは `PORT`、バインドは `HOST` で指定できます。
+2. 運用側で `python3 scripts/configure_live_relay.py wss://実際の運用ホスト/live`、`python3 scripts/sync_web_resources.py` を実行してiOSをビルドします。存在しないURLを設定しないでください。
+3. 必要な場合のみ、署名プロバイダーのAPIキーをサーバー環境変数 `EULER_API_KEY` に設定。アプリやソースへキーを埋め込みません。
+4. 対応するサーバーソースと依存ライセンスを利用者が取得できる形で提供してください（LICENSE参照）。
+
+実際のデプロイや公開、運用契約、キー発行は行っていません。サーバーが未設置の現状では、アプリだけを更新しても実LIVEへは接続できません。
+
+## 接続仕様
+
+- `{"type":"subscribe","tiktokId":"alice","subscriptionId":"uuid"}` でIDを指定。@付きも許容。アカウント固定なし。
+- `{"type":"round","subscriptionId":"uuid"}` で問題切替境界を更新。
+- サーバーは `status` と、`chat`（comment、eventId、timestamp、subscriptionId）だけを返します。
+- 配信者IDごとに上流接続を共有。別IDのコメントは混在させません。最後の利用者の切断時に上流も切断。
+- 初回の過去ログ受信を無効化。同一イベントID、購読前・問題切替前の時刻を拒否。ID切替と切断後の古い処理も破棄。
+- 接続タイムアウト20秒。サーバーの自動再接続ループなし。最大32配信/128クライアント、受信2KB、送信待ち64KB。アプリ側の再接続も最大5回で、明確な接続失敗・配信終了は自動再試行を停止。
+- ユーザー名、画像、視聴者プロフィールを返さず、コメント本文やIDをディスク保存しません。
+
+## 制約と検証範囲
+
+`tiktok-live-connector` は非公式の公開LIVE読み取りライブラリです。署名サービスとTikTok側の仕様・公開状態・アクセス制限に依存します。任意の全アカウントに必ず接続できる保証はありません。非公開/限定LIVEや配信停止中はエラーとして表示します。実LIVEは人間による配信開始後の確認が必要です。
+
+一次資料: https://github.com/zerodytrash/TikTok-Live-Connector/tree/ts-rewrite （インストール済み2.5.0のREADME/APIも参照して実装）。

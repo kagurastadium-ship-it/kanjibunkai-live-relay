@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: kanjibunkai-live
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci --omit=dev --no-audit --no-fund
+    startCommand: node server.mjs
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_VERSION
+        value: 24.22.0
+      - key: HOST
+        value: 0.0.0.0
