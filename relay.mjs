@@ -19,28 +19,29 @@ export function createRelay({createConnection,now=Date.now,timeoutMs=20000,maxRo
  const subscribe=(client,payload)=>{
   let id;try{id=normalizeId(payload.tiktokId)}catch{status(client,'TikTok IDを確認してください',{terminal:true});return}
   if(client.subscriptions++>=8){status(client,'接続先の変更が多すぎます。接続し直してください',{terminal:true});return}
-  release(client);client.subscriptionId=String(payload.subscriptionId||randomUUID()).slice(0,80);client.joinedAt=now();client.roundStartedAt=client.joinedAt;
+  release(client);client.subscriptionId=String(payload.subscriptionId||randomUUID()).slice(0,80);client.joinedAt=now();client.roundStartedAt=client.joinedAt;client.activity=payload.activity===true;
   let room=rooms.get(id);
   if(!room){
    if(rooms.size>=maxRooms){status(client,'LIVE接続が混み合っています',{terminal:true});return}
    if(now()-startWindow>=60000){startWindow=now();starts=0}if(starts>=maxStartsPerMinute){status(client,'接続要求が混み合っています。1分後に接続し直してください',{terminal:true});return}starts++;
    let connection;try{connection=createConnection(id)}catch{status(client,'LIVE接続を開始できません',{terminal:true});return}
-   room={id,connection,clients:new Set(),closed:false,ready:false,seen:new Set(),startedAt:now(),timer:null};rooms.set(id,room);
+   room={id,connection,clients:new Set(),closed:false,ready:false,seen:new Set(),latestTime:now(),startedAt:now(),timer:null};rooms.set(id,room);
    connection.on('error',error=>failure(room,error));
    connection.on('disconnected',()=>end(room,'LIVEから切断されました。再接続してください'));
    connection.on('streamEnd',()=>end(room,'LIVE配信が終了しました'));
    connection.on('chat',raw=>{
     if(room.closed||!room.ready)return;
-    const comment=String(raw?.content??raw?.comment??'').trim();if(!Answers.parse(comment))return;
-    const timestamp=eventTime(raw,now());if(timestamp===null||timestamp<room.startedAt||timestamp>now()+60000)return;
+    const comment=String(raw?.content??raw?.comment??'').trim();if(!comment)return;const answer=!!Answers.parse(comment);
+    const timestamp=eventTime(raw,now());if(timestamp===null||timestamp<room.latestTime||timestamp>now()+60000)return;
     const eventId=String(raw.msgId??raw.common?.msgId??raw.eventId??randomUUID());if(room.seen.has(eventId))return;room.seen.add(eventId);if(room.seen.size>512)room.seen.delete(room.seen.values().next().value);
-    for(const c of room.clients)if(timestamp>=c.joinedAt&&timestamp>=c.roundStartedAt)send(c,{type:'chat',comment,eventId,timestamp});
+    room.latestTime=Math.max(room.latestTime,timestamp);
+    for(const c of room.clients)if(timestamp>=c.joinedAt&&timestamp>=c.roundStartedAt){if(answer)send(c,{type:'chat',comment,eventId,timestamp});else if(c.activity)send(c,{type:'activity',eventId,timestamp})}
    });
    // Register the subscriber before connect() can synchronously emit events.
    client.room=room;room.clients.add(client);status(client,'TikTok LIVEに接続中…');
    room.timer=setTimer(()=>end(room,'LIVEへの接続がタイムアウトしました。再接続してください'),timeoutMs);
-   Promise.resolve().then(()=>connection.connect()).then(()=>{if(room.closed){return Promise.resolve(connection.disconnect()).catch(()=>{})}room.ready=true;clearTimer(room.timer);for(const c of room.clients)status(c,'LIVE接続済み：コメントを待機中')}).catch(error=>failure(room,error));
-  }else{client.room=room;room.clients.add(client);status(client,room.ready?'LIVE接続済み：コメントを待機中':'TikTok LIVEに接続中…')}
+   Promise.resolve().then(()=>connection.connect()).then(()=>{if(room.closed){return Promise.resolve(connection.disconnect()).catch(()=>{})}room.ready=true;clearTimer(room.timer);for(const c of room.clients)status(c,'LIVE接続済み：コメントを待機中',{connected:true})}).catch(error=>failure(room,error));
+  }else{client.room=room;room.clients.add(client);status(client,room.ready?'LIVE接続済み：コメントを待機中':'TikTok LIVEに接続中…',{connected:room.ready})}
  };
  function attach(socket){
   if(stopped||clients.size>=maxClients){socket.close(1013,'capacity');return}
@@ -49,6 +50,7 @@ export function createRelay({createConnection,now=Date.now,timeoutMs=20000,maxRo
   socket.on('message',bytes=>{
    let payload;try{payload=JSON.parse(String(bytes))}catch{return}
    if(payload?.type==='subscribe'){clearTimer(handshake);subscribe(client,payload)}
+   else if(payload?.type==='activity'&&payload.subscriptionId===client.subscriptionId){client.activity=payload.enabled===true}
    else if(payload?.type==='round'&&client.room&&payload.subscriptionId===client.subscriptionId){client.roundStartedAt=now()}
   });
   const dispose=()=>{clearTimer(handshake);release(client);clients.delete(client)};socket.on('close',dispose);socket.on('error',dispose);
