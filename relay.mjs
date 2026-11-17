@@ -9,7 +9,7 @@ export function upstreamFailure(error){
  return {kind,type};
 }
 // Room connections are shared only for the same ID. No usernames, avatars or chat history are stored.
-export function createRelay({createConnection,now=Date.now,timeoutMs=20000,maxRooms=32,maxClients=128,maxStartsPerMinute=30,onDiagnostic=()=>{},setTimer=setTimeout,clearTimer=clearTimeout}={}){
+export function createRelay({createConnection,verify,authSessionMs=1800000,now=Date.now,timeoutMs=20000,maxRooms=32,maxClients=128,maxStartsPerMinute=30,onDiagnostic=()=>{},setTimer=setTimeout,clearTimer=clearTimeout}={}){
  const rooms=new Map(),clients=new Set();let stopped=false,startWindow=now(),starts=0;
  const send=(client,payload)=>{if(client.socket.readyState!==1)return;if(client.socket.bufferedAmount>65536){client.socket.close(1013,'slow client');return}client.socket.send(JSON.stringify({...payload,subscriptionId:client.subscriptionId}))};
  const status=(client,state,extra={})=>send(client,{type:'status',state,...extra});
@@ -47,13 +47,14 @@ export function createRelay({createConnection,now=Date.now,timeoutMs=20000,maxRo
   if(stopped||clients.size>=maxClients){socket.close(1013,'capacity');return}
   const client={socket,room:null,subscriptionId:'',subscriptions:0,joinedAt:now(),roundStartedAt:now()};clients.add(client);
   const handshake=setTimer(()=>{if(!client.room)socket.close(1008,'subscription required')},10000);
-  socket.on('message',bytes=>{
+  let authEpoch=0,disposed=false,authExpiry;
+  socket.on('message',async bytes=>{
    let payload;try{payload=JSON.parse(String(bytes))}catch{return}
-   if(payload?.type==='subscribe'){clearTimer(handshake);subscribe(client,payload)}
+   if(payload?.type==='subscribe'){const epoch=++authEpoch;release(client);try{const verified=verify?await verify(payload):null;if(disposed||epoch!==authEpoch)return;const leaseMs=verify?Math.min(authSessionMs,Number(verified?.expiresAtMs)-now()):null;if(verify&&(!Number.isFinite(leaseMs)||leaseMs<=0))throw Error('Invalid or expired session');clearTimer(handshake);if(verify){clearTimer(authExpiry);authExpiry=setTimer(()=>socket.close(1008,'reauthentication required'),leaseMs)}subscribe(client,payload)}catch{if(!disposed&&epoch===authEpoch){status(client,'LIVE認証に失敗しました',{terminal:true});socket.close(1008,'authentication required')}}}
    else if(payload?.type==='activity'&&payload.subscriptionId===client.subscriptionId){client.activity=payload.enabled===true}
    else if(payload?.type==='round'&&client.room&&payload.subscriptionId===client.subscriptionId){client.roundStartedAt=now()}
   });
-  const dispose=()=>{clearTimer(handshake);release(client);clients.delete(client)};socket.on('close',dispose);socket.on('error',dispose);
+  const dispose=()=>{disposed=true;authEpoch++;clearTimer(authExpiry);clearTimer(handshake);release(client);clients.delete(client)};socket.on('close',dispose);socket.on('error',dispose);
  }
  return {attach,stats:()=>({rooms:rooms.size,clients:clients.size}),close:()=>{stopped=true;for(const client of [...clients]){release(client);client.socket.close(1001,'shutdown')}clients.clear()}};
 }

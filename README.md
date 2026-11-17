@@ -1,48 +1,29 @@
-# KanjiBunkai LIVE relay
+# KanjiBunkai protected LIVE relay — local proposal, not deployed
 
-アプリ利用者が入力するのは `@配信者ID` だけです。自分と他人の公開LIVEを同じ経路で扱います。URLはアプリ運用側がビルド時に1回設定し、利用者には入力させません。
+The current public Kanji service is the legacy relay. This directory is an inactive private candidate. Do not deploy it or enable an app URL until the operator explicitly approves the authentication policy and cutover.
 
-このサーバーは自動回答エンジンではなく、LIVEコメント受信専用です。ゲームの問題生成・学習・広告とは別プロセスで、LIVE機能がOFFならアプリから接続しません。TikTok配信の開始・コメント投稿操作は行いません。
+## Runtime and non-secret configuration
 
-## ローカル起動
+Node >=20 (Docker base remains node:24-alpine). Use the existing lockfile and `npm ci --omit=dev --no-audit --no-fund`. Unchanged TikTok connector2.5.0/ws8.22.1; Firebase Admin14.5.0 is added relative to the deployed legacy version.
 
-Node 20以上で `npm ci`、`npm test`、`npm start`。既定は `127.0.0.1:8787`、`GET /health` と WebSocket `/live` です。起動だけではTikTokへ通信せず、IDの購読要求を受けたときだけ接続します。Dockerfileでも起動できます。
+- `GOOGLE_CLOUD_PROJECT`: proposed value `kanji-bunkai-orl`; must match the existing Kanji app's native and web Firebase project. Do not copy another app's project.
+- `AUTH_VERIFICATION_MODE`: explicitly select `public_jwt` or `revocation`. Missing/unknown mode fails startup; no automatic fallback.
+- `public_jwt`: ID token and App Check signed-token/project/expiry verification using Google's public certificate/JWKS paths. No Admin service-account key or Auth user-record access is needed for this path. Immediate account-disable/revocation lookup is not performed; an issued token can remain acceptable until its real expiry. A session limit is not a replacement for revocation checking.
+- `revocation`: existing `verifyIdToken(token,true)` plus App Check verification. Existing authorized Admin credentials and Kanji Auth user-state read permission are necessary. Never create/copy keys or broaden permissions merely to start this candidate.
+- `FIREBASE_APP_IDS`: required comma-separated approved native/web Firebase app IDs from the same project number. Exact app ID allowlist and exact App Check issuer project number are enforced. Values must be confirmed against existing app configuration before deployment.
+- `FIREBASE_AUTH_EMULATOR_HOST` must be absent; otherwise startup fails.
+- `HOST`, `PORT`: existing hosting values. Optional `EULER_API_KEY` is a separate upstream signing-service credential; never send it from the app or print it. No credential values are included here.
 
-## 今回の無料運用方針
+## Protocol, lifetime and health
 
-Cloud Runなど従量課金のサービスは使いません。RenderのHobbyワークスペースとFree Web Serviceを使い、支払い方法は登録しません。無料枠を超えた場合は課金ではなく停止・ビルド停止になります。アイドル15分で休止し、次の接続で復帰に約1分かかる仕様です。これを回避する定期アクセスは追加しません。実配信・アプリ更新申請の前に、配信中の接続維持を確認します。
+The current app already sends subscribe fields `tiktokId`, `subscriptionId`, `activity`, `idToken`, `appCheckToken`. No client-code downgrade is required. Authentication failure rejects before an upstream connection and returns a generic failure only. Sessions close at the earlier of both verified tokens' expiry or30minutes; fresh authentication is needed to reconnect. Multiple clients have separate lifetimes even when sharing one upstream room. Old tokenless apps will fail authentication after cutover.
 
-Freeは稼働保証がなく、提供元も本番用途への利用を推奨していません。上限や仕様変更・提供停止時はアプリ側で接続エラーとして扱い、有料プランへ自動移行しません。
+`GET /health` reports process liveness only. It does not prove Firebase permissions, token validity, upstream TikTok availability, or end-to-end LIVE readiness. It opens no upstream connection. `/live` accepts subscribe over WebSocket; tokens are not placed in URLs. Public source whitelist remains available for AGPL source distribution and does not serve environment or secret files.
 
-公式: https://render.com/docs/free 、https://render.com/docs/websocket
+No polling/keepalive traffic or paid-plan changes are introduced. Max32rooms/128clients, bounded starts/subscriptions/buffers and connection timeout remain inherited from the current implementation. No usernames/profile data/comment histories are stored. See LICENSE and THIRD_PARTY_NOTICES.md.
 
-## 運用前に必要な設定
+## Local validation limits
 
-1. 常時起動できるNode/Docker対応環境へ配置し、TLS終端を経由して `/live` をWSS公開します。ポートは `PORT`、バインドは `HOST` で指定できます。
-2. 運用側で `python3 scripts/configure_live_relay.py wss://実際の運用ホスト/live`、`python3 scripts/sync_web_resources.py` を実行してiOSをビルドします。存在しないURLを設定しないでください。
-3. 必要な場合のみ、署名プロバイダーのAPIキーをサーバー環境変数 `EULER_API_KEY` に設定。アプリやソースへキーを埋め込みません。
-4. 対応するサーバーソースと依存ライセンスを利用者が取得できる形で提供してください（LICENSE参照）。
+Normal clean npm ci from the official registry succeeded in ../runtime-validation/server (238 packages, install scripts disabled). This supersedes the earlier offline-cache failure. 28 local unit/SDK tests pass. 17 additional real Node-process tests pass using the actual installed Admin SDK RSA signature verification, loopback public-key transport, ephemeral memory-only signed fixtures and a fake TikTok upstream. They cover health, key-fetch failure fail-closed, signature/issuer/audience/project/expiry/app-ID rejection, valid connection, separate expiry with shared upstream, release/reconnect and secret-free logs/zero credential access. No real user tokens, Google/TikTok requests, service credentials or production connections were used. All test child processes exited.
 
-実際のデプロイや公開、運用契約、キー発行は行っていません。サーバーが未設置の現状では、アプリだけを更新しても実LIVEへは接続できません。
-
-## 回答コメント
-
-漢字・かな・英字・絵文字など、見た目が1文字のコメントと筆画番号の候補を通します。例: `木`、`答えは木`、`1,2,3`、`１・２・３`、`1画目と2画目`、`1-3`。ハイフンは範囲なので `1-3` は1・2・3画です。`123` は123画を意味し、1・2・3には分割しません。通常会話、日時の文章、長文は無視します。80文字・32筆画以内に限定した共有パーサーを使い、実際の正誤はアプリの準備済み正解データで判定します。常用外の漢字や漢字以外の1文字も回答候補とし、対象外なら「〇〇はありません」、既発見なら「〇〇は解答済み」をゲーム上部の漢字一覧へ3秒表示します。既発見回答は二重加算しません。
-
-`answer-comments.cjs` はファイル内に明記したMITライセンスで、iOSには同じ内容を `kb29_live_answers.js` として同梱します。`scripts/sync_web_resources.py` が正式プロジェクト側で同期します。中継本体のAGPLライセンスは維持しています。
-
-## 接続仕様
-
-- `{"type":"subscribe","tiktokId":"alice","subscriptionId":"uuid"}` でIDを指定。@付きも許容。アカウント固定なし。
-- `{"type":"round","subscriptionId":"uuid"}` で問題切替境界を更新。
-- サーバーは `status` と、`chat`（comment、eventId、timestamp、subscriptionId）だけを返します。
-- 配信者IDごとに上流接続を共有。別IDのコメントは混在させません。最後の利用者の切断時に上流も切断。
-- 初回の過去ログ受信を無効化。同一イベントID、購読前・問題切替前の時刻を拒否。ID切替と切断後の古い処理も破棄。
-- 接続タイムアウト20秒。サーバーの自動再接続ループなし。最大32配信/128クライアント、受信2KB、送信待ち64KB。アプリ側の再接続も最大5回で、明確な接続失敗・配信終了は自動再試行を停止。
-- ユーザー名、画像、視聴者プロフィールを返さず、コメント本文やIDをディスク保存しません。
-
-## 制約と検証範囲
-
-`tiktok-live-connector` は非公式の公開LIVE読み取りライブラリです。署名サービスとTikTok側の仕様・公開状態・アクセス制限に依存します。任意の全アカウントに必ず接続できる保証はありません。非公開/限定LIVEや配信停止中はエラーとして表示します。実LIVEは人間による配信開始後の確認が必要です。
-
-一次資料: https://github.com/zerodytrash/TikTok-Live-Connector/tree/ts-rewrite （インストール済み2.5.0のREADME/APIも参照して実装）。
+Docker is not installed; no Docker image build was performed. Node24.22.0 real-process startup is verified, not Render deployment or end-to-end upstream availability. Immediate Auth disable/revocation lookup and App Check replay consumption are not supplied by public_jwt. No new software, external settings or plan changes were made.
